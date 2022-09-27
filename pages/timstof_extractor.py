@@ -8,29 +8,52 @@ from timstof_utils import generate_ms2
 
 st.title('TimsTof Raw File Extractor')
 
-rand_uuid = str(uuid4())
-ms2_file_name = rand_uuid + '.ms2'
+with st.expander('Help'):
+    st.subheader('Where to find tdf files?')
+    st.markdown("""
+    The analysis.tdf and analysis.tdf_bin are located inside of the .d folder
+    
+    Rename the ms2 file to whatever you like. Otherwise leave it blank to randomly generate a file name.
+    """)
 
-tdf = st.file_uploader('tdf file', type='.tdf')
-tdf_bin = st.file_uploader('tdf_bin file', type='.tdf_bin')
-ms2_file_name = st.text_input('Ms2 File Name', ms2_file_name)
+tdf = st.file_uploader(label='tdf file', type='.tdf')
+tdf_bin = st.file_uploader(label='tdf_bin file', type='.tdf_bin')
+ms2_file_name = st.text_input(label='Ms2 File Name', value='',
+                              help='name to give ms2 file, leave blank to randomly generate a unique name.')
+
+if ms2_file_name == '':
+    ms2_file_name = str(uuid4()) + '.ms2'
+st.markdown(f'**output ms2 file**:  {ms2_file_name}')
 
 if st.button('Run'):
 
-    d_folder = Path()
-    os.mkdir(d_folder)
+    if tdf is None:
+        st.warning('upload tdf file')
 
-    tdf_path = d_folder / 'analysis.tdf'
-    tdf_path.write_bytes(tdf.getvalue())
+    if tdf_bin is None:
+        st.warning('upload tdf_bin file')
 
-    tdf_bin_path = d_folder / 'analysis.tdf_bin'
-    tdf_bin_path.write_bytes(tdf_bin.getvalue())
+    if tdf is None or tdf_bin is None:
+        st.stop()
 
-    ms2_file = generate_ms2(str(d_folder))
+    rand_uuid = str(uuid4())
+    d_folder = Path(rand_uuid)
 
-    shutil.rmtree(str(d_folder))
+    try:
+        os.mkdir(d_folder)
+
+        tdf_path = d_folder / 'analysis.tdf'
+        tdf_path.write_bytes(tdf.getvalue())
+
+        tdf_bin_path = d_folder / 'analysis.tdf_bin'
+        tdf_bin_path.write_bytes(tdf_bin.getvalue())
+
+        ms2_file = generate_ms2(str(d_folder))
+    finally:
+        shutil.rmtree(str(d_folder))
 
     st.download_button('Download Ms2', ms2_file, ms2_file_name)
+
 
 
 
