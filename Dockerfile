@@ -1,6 +1,10 @@
-FROM fnndsc/ubuntu-python3
+FROM ubuntu
 
-ENV LANG C.UTF-8
+RUN apt-get update -y
+RUN apt-get install -y python3
+RUN apt-get install -y python3-pip
+
+RUN python3 --version
 
 WORKDIR /usr/src/app
 
