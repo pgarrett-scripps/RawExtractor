@@ -1,5 +1,7 @@
 FROM fnndsc/ubuntu-python3
 
+ENV LANG C.UTF-8
+
 WORKDIR /usr/src/app
 
 COPY requirements.txt .
