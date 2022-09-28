@@ -1,10 +1,4 @@
-FROM ubuntu
-
-RUN apt-get update -y
-
-RUN apt-get install -y python3
-
-RUN python --version
+FROM fnndsc/ubuntu-python3
 
 WORKDIR /usr/src/app
 
