@@ -12,7 +12,7 @@ with st.expander('Help'):
     st.subheader('Where to find tdf files?')
     st.markdown("""
     The analysis.tdf and analysis.tdf_bin are located inside of the .d folder
-    
+
     Rename the ms2 file to whatever you like. Otherwise leave it blank to randomly generate a file name.
     """)
 
@@ -54,7 +54,3 @@ if st.button('Run'):
         shutil.rmtree(str(d_folder))
 
     st.download_button('Download Ms2', ms2_file, ms2_file_name)
-
-
-
-
