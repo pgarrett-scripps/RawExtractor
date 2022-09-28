@@ -1,8 +1,15 @@
-FROM python:3.10.7-alpine3.16
+FROM ubuntu
+
+RUN sudo apt-get update -y
+
+RUN sudo apt-get install -y python
+
+RUN python --version
 
 WORKDIR /usr/src/app
 
 COPY requirements.txt .
+
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
