@@ -165,90 +165,92 @@ def build_frame_id_ms1_scan_map(precursor_map, all_ms1_list):
     return frame_id_ms1_scan_map, ms2_map
 
 
-def generate_ms2(tdf_conn):
-    td = timsdata.TimsData(tdf_conn)
+def generate_ms2(analysis_directory):
+    td = timsdata.TimsData(analysis_directory)
+
     conn = td.conn
-    td.setNumThread(1)
-
-    precursor_map = {}
-    precursor_collision_energy_map = {}
-    with conn:
-        msms_data = select_all_PasefFrameMsMsInfo(conn)
-        for frame, sn_begin, sn_end, isoMz, isoW, ce, prec_id in msms_data:
-            precursor_collision_energy_map[prec_id] = ce
-        # print msms_data[0:5]
-        all_frame = select_all_Frames(conn)
-        frame_id_to_frame = {int(frame[0]):frame for frame in all_frame}
-        # print all_frame[0:5]
-        precursor_list = select_all_Precursors(conn)
-        for row in precursor_list:
-            parent_id = int(row[-1])
-            if parent_id not in precursor_map:
-                precursor_map[parent_id] = []
-            precursor_map[parent_id].append(row)
-
-    all_ms1_frames = [a for a in all_frame if a[4] == '0']
-
-    frame_id_ms1_scan_map, ms2_scan_map = build_frame_id_ms1_scan_map(precursor_map, all_ms1_frames)
-
-    precursor_array = np.array(
-        precursor_list)  # 'ID', 'LargestPeakMz', 'AverageMz', 'MonoisotopicMz', 'Charge', 'ScanNumber', 'Intensity', 'Parent'
-
-    parent_frame_array = np.array(precursor_array[:, 7])
-    frame_index_list = []
-    last_val = 0
-    for idx, val in enumerate(parent_frame_array):
-        if val != last_val:
-            frame_index_list.append(idx)
-        last_val = val
-
-    ms2_header = 'H\tExtractor\tTimsTOF_extractor\n' \
-                 'H\tExtractorVersion\t{}\n' \
-                 'H\tPublicationDate\t20-02-2020\n' \
-                 'H\tComments\tTimsTOF_extractor written by Yu Gao, 2018\n' \
-                 'H\tComments\tTimsTOF_extractor modified by Titus Jung, 2019\n' \
-                 'H\tComments\tTimsTOF_extractor modified by Patrick Garrett, 2021\n' \
-                 'H\tExtractorOptions\tMSn\n' \
-                 'H\tAcquisitionMethod\tData-Dependent\n' \
-                 'H\tInstrumentType\tTIMSTOF\n' \
-                 'H\tDataType\tCentroid\n' \
-                 'H\tScanType\tMS2\n' \
-                 'H\tResolution\n' \
-                 'H\tIsolationWindow\n' \
-                 'H\tFirstScan\t1\n' \
-                 'H\tLastScan\t{}\n' \
-                 'H\tMonoIsotopic PrecMz\tTrue\n'.format(version, len(msms_data))
-
     ms2_lines = []
 
-    ms2_lines.append(ms2_header)
-    for row in precursor_list:
-        prc_id, largest_preak_mz, average_mz, monoisotopic_mz, cs, scan_number, intensity, parent = row
-        prc_id_int = int(prc_id)
-        if monoisotopic_mz is not None and cs is not None:
-            prc_mass_mz = float(monoisotopic_mz)
-            prc_mass = (prc_mass_mz * cs) - (cs - 1) * 1.007276466
+    try:
 
-            mz_int_arr = td.readPasefMsMs([prc_id_int])
-            parent_index = int(parent)
-            scan_id = ms2_scan_map[parent_index][prc_id_int]
-            rt_time = float(frame_id_to_frame[parent_index][1])
-            k0 = td.scanNumToOneOverK0(parent_index, [scan_number])
-            mz_arr = mz_int_arr[prc_id_int][0]
-            collision_energy = precursor_collision_energy_map[prc_id_int]
-            if len(mz_arr) > 0:
-                ms2_lines.append("S\t{0:06d}\t{1:06d}\t{2:.5f}\n".format(scan_id, scan_id, prc_mass_mz))
-                ms2_lines.append("I\tTIMSTOF_Parent_ID\t{}\n".format(parent))
-                ms2_lines.append("I\tTIMSTOF_Precursor_ID\t{}\n".format(prc_id))
-                ms2_lines.append("I\tPrecursor Intensity\t{0:.5f}\n".format(intensity))
-                ms2_lines.append("I\tRetTime\t{0:.5f}\n".format(rt_time))
-                ms2_lines.append("I\tIon Mobility\t{0:.5f}\n".format(k0[0]))
-                ms2_lines.append("I\tCCS\t{0:.5f}\n".format(timsdata.oneOverK0ToCCSforMz(k0[0], cs, prc_mass_mz)))
-                ms2_lines.append("I\tCollision Energy\t{0:.3f}\n".format(collision_energy))
-                ms2_lines.append("Z\t{1}\t{0:.5f}\n".format(prc_mass, cs))
+        precursor_map = {}
+        precursor_collision_energy_map = {}
+        with conn:
+            msms_data = select_all_PasefFrameMsMsInfo(conn)
+            for frame, sn_begin, sn_end, isoMz, isoW, ce, prec_id in msms_data:
+                precursor_collision_energy_map[prec_id] = ce
+            # print msms_data[0:5]
+            all_frame = select_all_Frames(conn)
+            frame_id_to_frame = {int(frame[0]):frame for frame in all_frame}
+            # print all_frame[0:5]
+            precursor_list = select_all_Precursors(conn)
+            for row in precursor_list:
+                parent_id = int(row[-1])
+                if parent_id not in precursor_map:
+                    precursor_map[parent_id] = []
+                precursor_map[parent_id].append(row)
 
-                int_arr = mz_int_arr[prc_id_int][1]
-                for j in range(0, len(mz_arr)):
-                    ms2_lines.append("%.5f %.1f \n" % (mz_arr[j], int_arr[j]))
+        all_ms1_frames = [a for a in all_frame if a[4] == '0']
 
+        frame_id_ms1_scan_map, ms2_scan_map = build_frame_id_ms1_scan_map(precursor_map, all_ms1_frames)
+
+        precursor_array = np.array(
+            precursor_list)  # 'ID', 'LargestPeakMz', 'AverageMz', 'MonoisotopicMz', 'Charge', 'ScanNumber', 'Intensity', 'Parent'
+
+        parent_frame_array = np.array(precursor_array[:, 7])
+        frame_index_list = []
+        last_val = 0
+        for idx, val in enumerate(parent_frame_array):
+            if val != last_val:
+                frame_index_list.append(idx)
+            last_val = val
+
+        ms2_header = 'H\tExtractor\tTimsTOF_extractor\n' \
+                     'H\tExtractorVersion\t{}\n' \
+                     'H\tPublicationDate\t20-02-2020\n' \
+                     'H\tComments\tTimsTOF_extractor written by Yu Gao, 2018\n' \
+                     'H\tComments\tTimsTOF_extractor modified by Titus Jung, 2019\n' \
+                     'H\tComments\tTimsTOF_extractor modified by Patrick Garrett, 2021\n' \
+                     'H\tExtractorOptions\tMSn\n' \
+                     'H\tAcquisitionMethod\tData-Dependent\n' \
+                     'H\tInstrumentType\tTIMSTOF\n' \
+                     'H\tDataType\tCentroid\n' \
+                     'H\tScanType\tMS2\n' \
+                     'H\tResolution\n' \
+                     'H\tIsolationWindow\n' \
+                     'H\tFirstScan\t1\n' \
+                     'H\tLastScan\t{}\n' \
+                     'H\tMonoIsotopic PrecMz\tTrue\n'.format(version, len(msms_data))
+
+        ms2_lines.append(ms2_header)
+        for row in precursor_list:
+            prc_id, largest_preak_mz, average_mz, monoisotopic_mz, cs, scan_number, intensity, parent = row
+            prc_id_int = int(prc_id)
+            if monoisotopic_mz is not None and cs is not None:
+                prc_mass_mz = float(monoisotopic_mz)
+                prc_mass = (prc_mass_mz * cs) - (cs - 1) * 1.007276466
+
+                mz_int_arr = td.readPasefMsMs([prc_id_int])
+                parent_index = int(parent)
+                scan_id = ms2_scan_map[parent_index][prc_id_int]
+                rt_time = float(frame_id_to_frame[parent_index][1])
+                k0 = td.scanNumToOneOverK0(parent_index, [scan_number])
+                mz_arr = mz_int_arr[prc_id_int][0]
+                collision_energy = precursor_collision_energy_map[prc_id_int]
+                if len(mz_arr) > 0:
+                    ms2_lines.append("S\t{0:06d}\t{1:06d}\t{2:.5f}\n".format(scan_id, scan_id, prc_mass_mz))
+                    ms2_lines.append("I\tTIMSTOF_Parent_ID\t{}\n".format(parent))
+                    ms2_lines.append("I\tTIMSTOF_Precursor_ID\t{}\n".format(prc_id))
+                    ms2_lines.append("I\tPrecursor Intensity\t{0:.5f}\n".format(intensity))
+                    ms2_lines.append("I\tRetTime\t{0:.5f}\n".format(rt_time))
+                    ms2_lines.append("I\tIon Mobility\t{0:.5f}\n".format(k0[0]))
+                    ms2_lines.append("I\tCCS\t{0:.5f}\n".format(timsdata.oneOverK0ToCCSforMz(k0[0], cs, prc_mass_mz)))
+                    ms2_lines.append("I\tCollision Energy\t{0:.3f}\n".format(collision_energy))
+                    ms2_lines.append("Z\t{1}\t{0:.5f}\n".format(prc_mass, cs))
+
+                    int_arr = mz_int_arr[prc_id_int][1]
+                    for j in range(0, len(mz_arr)):
+                        ms2_lines.append("%.5f %.1f \n" % (mz_arr[j], int_arr[j]))
+    finally:
+        conn.close()
     return ''.join(ms2_lines)

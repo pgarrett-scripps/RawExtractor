@@ -49,6 +49,7 @@ if st.button('Run'):
         tdf_bin_path.write_bytes(tdf_bin.getvalue())
 
         ms2_file = generate_ms2(str(d_folder))
+
     finally:
         shutil.rmtree(str(d_folder))
 

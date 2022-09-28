@@ -5,9 +5,8 @@ import numpy as np
 import sqlite3
 import os, sys
 from ctypes import *
-
-print(os.getcwd())
-print(sys.platform[:5])
+from pathlib import Path
+from enum import Enum
 
 p = os.path.dirname(os.path.abspath(__file__))
 
@@ -19,11 +18,11 @@ elif sys.platform[:5] == "linux":
     libname = p + r"/lib/linux64/libtimsdata.so"
 else:
     raise Exception("Unsupported platform.")
-print(libname)
 
 dll = cdll.LoadLibrary(libname)
-dll.tims_open.argtypes = [c_char_p, c_uint32]
-dll.tims_open.restype = c_uint64
+
+dll.tims_open_v2.argtypes = [c_char_p, c_uint32, c_uint32]
+dll.tims_open_v2.restype = c_uint64
 dll.tims_close.argtypes = [c_uint64]
 dll.tims_close.restype = None
 dll.tims_get_last_error_string.argtypes = [c_char_p, c_uint32]
@@ -42,6 +41,31 @@ dll.tims_read_pasef_profile_msms.argtypes = [c_uint64, POINTER(c_int64), c_uint3
 dll.tims_read_pasef_profile_msms.restype = c_uint32
 dll.tims_read_pasef_profile_msms_for_frame.argtypes = [c_uint64, c_int64, MSMS_PROFILE_SPECTRUM_FUNCTOR]
 dll.tims_read_pasef_profile_msms_for_frame.restype = c_uint32
+
+dll.tims_extract_centroided_spectrum_for_frame_v2.argtypes = [c_uint64, c_int64, c_uint32, c_uint32,
+                                                              MSMS_SPECTRUM_FUNCTOR, c_void_p]
+dll.tims_extract_centroided_spectrum_for_frame_v2.restype = c_uint32
+dll.tims_extract_centroided_spectrum_for_frame_ext.argtypes = [c_uint64, c_int64, c_uint32, c_uint32, c_double,
+                                                               MSMS_SPECTRUM_FUNCTOR, c_void_p]
+dll.tims_extract_centroided_spectrum_for_frame_ext.restype = c_uint32
+dll.tims_extract_profile_for_frame.argtypes = [c_uint64, c_int64, c_uint32, c_uint32, MSMS_PROFILE_SPECTRUM_FUNCTOR,
+                                               c_void_p]
+dll.tims_extract_profile_for_frame.restype = c_uint32
+
+
+class ChromatogramJob(Structure):
+    _fields_ = [
+        ("id", c_int64),
+        ("time_begin", c_double), ("time_end", c_double),
+        ("mz_min", c_double), ("mz_max", c_double),
+        ("ook0_min", c_double), ("ook0_max", c_double)
+    ]
+
+
+CHROMATOGRAM_JOB_GENERATOR = CFUNCTYPE(c_uint32, POINTER(ChromatogramJob), c_void_p)
+CHROMATOGRAM_TRACE_SINK = CFUNCTYPE(c_uint32, c_int64, c_uint32, POINTER(c_int64), POINTER(c_uint64), c_void_p)
+dll.tims_extract_chromatograms.argtypes = [c_uint64, CHROMATOGRAM_JOB_GENERATOR, CHROMATOGRAM_TRACE_SINK, c_void_p]
+dll.tims_extract_chromatograms.restype = c_uint32
 
 convfunc_argtypes = [c_uint64, c_int64, POINTER(c_double), POINTER(c_double), c_uint32]
 
@@ -66,37 +90,14 @@ dll.tims_oneoverk0_to_ccs_for_mz.restype = c_double
 dll.tims_ccs_to_oneoverk0_for_mz.argtypes = [c_double, c_int32, c_double]
 dll.tims_ccs_to_oneoverk0_for_mz.restype = c_double
 
-# set num threads function to avoid 100% cpu util
-dll.tims_set_num_threads.argtypes = [c_int32]
 
-
-def throwLastTimsDataError(dll_handle):
+def _throwLastTimsDataError(dll_handle):
     """Throw last TimsData error string as an exception."""
 
     len = dll_handle.tims_get_last_error_string(None, 0)
     buf = create_string_buffer(len)
     dll_handle.tims_get_last_error_string(buf, len)
     raise RuntimeError(buf.value)
-
-
-# Decodes a properties BLOB of type 12 (array of strings = concatenation of
-# zero-terminated UTF-8 strings). (The BLOB object returned by an SQLite query can be
-# directly put into this function.) \returns a list of unicode strings.
-def decodeArrayOfStrings(blob):
-    if blob is None:
-        return None  # property not set
-
-    if len(blob) == 0:
-        return []  # empty list
-
-    blob = bytearray(blob)
-    if blob[-1] != 0:
-        raise ValueError("Illegal BLOB contents.")  # trailing nonsense
-
-    if sys.version_info.major == 2:
-        return unicode(str(blob), 'utf-8').split('\0')[:-1]
-    if sys.version_info.major == 3:
-        return str(blob, 'utf-8').split('\0')[:-1]
 
 
 # Convert 1/K0 to CCS for a given charge and mz
@@ -109,9 +110,15 @@ def ccsToOneOverK0ToCCSforMz(ccs, charge, mz):
     return dll.tims_ccs_to_oneoverk0_for_mz(ccs, charge, mz)
 
 
-class TimsData:
+class PressureCompensationStrategy(Enum):
+    NoPressureCompensation = 0
+    AnalyisGlobalPressureCompensation = 1
+    PerFramePressureCompensation = 2
 
-    def __init__(self, analysis_directory, use_recalibrated_state=False):
+
+class TimsData:
+    def __init__(self, analysis_directory, use_recalibrated_state=False,
+                 pressure_compensation_strategy=PressureCompensationStrategy.NoPressureCompensation):
 
         if sys.version_info.major == 2:
             if not isinstance(analysis_directory, unicode):
@@ -122,31 +129,42 @@ class TimsData:
 
         self.dll = dll
 
-        self.handle = self.dll.tims_open(
+        self.handle = self.dll.tims_open_v2(
             analysis_directory.encode('utf-8'),
-            1 if use_recalibrated_state else 0)
+            1 if use_recalibrated_state else 0,
+            pressure_compensation_strategy.value)
         if self.handle == 0:
-            throwLastTimsDataError(self.dll)
+            _throwLastTimsDataError(self.dll)
 
         self.conn = sqlite3.connect(os.path.join(analysis_directory, "analysis.tdf"))
 
         self.initial_frame_buffer_size = 128  # may grow in readScans()
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, type, value, traceback):
+        self.close()
+
     def __del__(self):
-        if hasattr(self, 'handle'):
+        self.close()
+
+    def close(self):
+        if hasattr(self, 'handle') and self.handle is not None:
             self.dll.tims_close(self.handle)
+            self.handle = None
+        if hasattr(self, 'conn') and self.conn is not None:
+            self.conn.close()
+            self.conn = None
 
     def __callConversionFunc(self, frame_id, input_data, func):
 
         if type(input_data) is np.ndarray and input_data.dtype == np.float64:
             # already "native" format understood by DLL -> avoid extra copy
             in_array = input_data
-            # print("keep array", func,type(input_data))
-
         else:
             # convert data to format understood by DLL:
             in_array = np.array(input_data, dtype=np.float64)
-            # print("make new array", func,type(input_data))
 
         cnt = len(in_array)
         out = np.empty(shape=cnt, dtype=np.float64)
@@ -156,7 +174,7 @@ class TimsData:
                        cnt)
 
         if success == 0:
-            throwLastTimsDataError(self.dll)
+            _throwLastTimsDataError(self.dll)
 
         return out
 
@@ -178,11 +196,11 @@ class TimsData:
     def voltageToScanNum(self, frame_id, voltages):
         return self.__callConversionFunc(frame_id, voltages, self.dll.tims_voltage_to_scannum)
 
-    def setNumThread(self, num_threads):
-        self.dll.tims_set_num_threads(num_threads)
+    def readScansDllBuffer(self, frame_id, scan_begin, scan_end):
+        """Read a range of scans from a frame, returning the data in the low-level buffer format defined for
+        the 'tims_read_scans_v2' DLL function (see documentation in 'timsdata.h').
 
-    # Output: list of tuples (indices, intensities)
-    def readScans(self, frame_id, scan_begin, scan_end):
+        """
 
         # buffer-growing loop
         while True:
@@ -194,16 +212,25 @@ class TimsData:
                                                        buf.ctypes.data_as(POINTER(c_uint32)),
                                                        len)
             if required_len == 0:
-                throwLastTimsDataError(self.dll)
+                _throwLastTimsDataError(self.dll)
 
             if required_len > len:
                 if required_len > 16777216:
                     # arbitrary limit for now...
-                    print(required_len)
                     raise RuntimeError("Maximum expected frame size exceeded.")
                 self.initial_frame_buffer_size = required_len / 4 + 1  # grow buffer
             else:
                 break
+
+        return buf
+
+    def readScans(self, frame_id, scan_begin, scan_end):
+        """Read a range of scans from a frame, returning a list of scans, each scan being represented as a
+        tuple (index_array, intensity_array).
+
+        """
+
+        buf = self.readScansDllBuffer(frame_id, scan_begin, scan_end)
 
         result = []
         d = scan_end - scan_begin
@@ -216,43 +243,6 @@ class TimsData:
             result.append((indices, intensities))
 
         return result
-
-        # Output: list of tuples (indices, intensities)
-
-    def readScansByNumber(self, frame_id, scan_begin, scan_end):
-
-        # buffer-growing loop
-        while True:
-            cnt = int(self.initial_frame_buffer_size)  # necessary cast to run with python 3.5
-            buf = np.empty(shape=cnt, dtype=np.uint32)
-            len = 4 * cnt
-
-            required_len = self.dll.tims_read_scans_v2(self.handle, frame_id, scan_begin, scan_end,
-                                                       buf.ctypes.data_as(POINTER(c_uint32)),
-                                                       len)
-            if required_len == 0:
-                throwLastTimsDataError(self.dll)
-
-            if required_len > len:
-                if required_len > 16777216 * 2:
-                    print(required_len)
-                    # arbitrary limit for now...
-                    raise RuntimeError("Maximum expected frame size exceeded.")
-                self.initial_frame_buffer_size = required_len / 4 + 1  # grow buffer
-            else:
-                break
-
-        results = []
-        d = scan_end - scan_begin
-        for i in range(scan_begin, scan_end):
-            npeaks = buf[i - scan_begin]
-            indices = buf[d: d + npeaks]
-            d += npeaks
-            intensities = buf[d: d + npeaks]
-            d += npeaks
-            results.append((indices, intensities))
-
-        return results
 
     # read some peak-picked MS/MS spectra for a given list of precursors; returns a dict mapping
     # 'precursor_id' to a pair of arrays (mz_values, area_values).
@@ -271,7 +261,7 @@ class TimsData:
                                            callback_for_dll)
 
         if rc == 0:
-            throwLastTimsDataError(self.dll)
+            _throwLastTimsDataError(self.dll)
 
         return result
 
@@ -289,7 +279,7 @@ class TimsData:
                                                      callback_for_dll)
 
         if rc == 0:
-            throwLastTimsDataError(self.dll)
+            _throwLastTimsDataError(self.dll)
 
         return result
 
@@ -310,7 +300,7 @@ class TimsData:
                                                    callback_for_dll)
 
         if rc == 0:
-            throwLastTimsDataError(self.dll)
+            _throwLastTimsDataError(self.dll)
 
         return result
 
@@ -328,7 +318,108 @@ class TimsData:
                                                              callback_for_dll)
 
         if rc == 0:
-            throwLastTimsDataError(self.dll)
+            _throwLastTimsDataError(self.dll)
 
         return result
 
+    # read peak-picked spectra for a tims frame;
+    # returns a pair of arrays (mz_values, area_values).
+    def extractCentroidedSpectrumForFrame(self, frame_id, scan_begin, scan_end, peak_picker_resolution=None):
+        result = None
+
+        @MSMS_SPECTRUM_FUNCTOR
+        def callback_for_dll(precursor_id, num_peaks, mz_values, area_values):
+            nonlocal result
+            result = (mz_values[0:num_peaks], area_values[0:num_peaks])
+
+        if peak_picker_resolution is None:
+            rc = self.dll.tims_extract_centroided_spectrum_for_frame_v2(
+                self.handle,
+                frame_id,
+                scan_begin,
+                scan_end,
+                callback_for_dll,
+                None)  # python dos not need the additional context, we have nonlocal
+        else:
+            rc = self.dll.tims_extract_centroided_spectrum_for_frame_ext(
+                self.handle,
+                frame_id,
+                scan_begin,
+                scan_end,
+                peak_picker_resolution,
+                callback_for_dll,
+                None)  # python dos not need the additional context, we have nonlocal
+
+        if rc == 0:
+            _throwLastTimsDataError(self.dll)
+
+        return result
+
+    # read "quasi profile" spectra for a tims frame;
+    # returns the profil array (intensity_values).
+    def extractProfileForFrame(self, frame_id, scan_begin, scan_end):
+        result = None
+
+        @MSMS_PROFILE_SPECTRUM_FUNCTOR
+        def callback_for_dll(precursor_id, num_points, intensity_values):
+            nonlocal result
+            result = intensity_values[0:num_points]
+
+        rc = self.dll.tims_extract_profile_for_frame(
+            self.handle,
+            frame_id,
+            scan_begin,
+            scan_end,
+            callback_for_dll,
+            None)  # python dos not need the additional context, we have nonlocal
+
+        if rc == 0:
+            _throwLastTimsDataError(self.dll)
+
+        return result
+
+    def extractChromatograms(self, jobs, trace_sink):
+        """Efficiently extract several MS1-only extracted-ion chromatograms.
+
+        The argument 'jobs' defines which chromatograms are to be extracted; it must be an iterator
+        (generator) object producing a stream of ChromatogramJob objects. The jobs must be produced
+        in the order of ascending 'time_begin'.
+
+        The function 'trace_sink' is called for each extracted trace with three arguments: job ID,
+        numpy array of frame IDs ("x axis"), numpy array of chromatogram values ("y axis").
+
+        For more information, see the documentation of the C-language API of the timsdata DLL.
+
+        """
+
+        @CHROMATOGRAM_JOB_GENERATOR
+        def wrap_gen(job, user_data):
+            try:
+                job[0] = next(jobs)
+                return 1
+            except StopIteration:
+                return 2
+            except Exception as e:
+                # TODO: instead of printing this here, let extractChromatograms throw this
+                print("extractChromatograms: generator produced exception ", e)
+                return 0
+
+        @CHROMATOGRAM_TRACE_SINK
+        def wrap_sink(job_id, num_points, frame_ids, values, user_data):
+            try:
+                trace_sink(
+                    job_id,
+                    np.array(frame_ids[0:num_points], dtype=np.int64),
+                    np.array(values[0:num_points], dtype=np.uint64)
+                )
+                return 1
+            except Exception as e:
+                # TODO: instead of printing this here, let extractChromatograms throw this
+                print("extractChromatograms: sink produced exception ", e)
+                return 0
+
+        unused_user_data = 0
+        rc = self.dll.tims_extract_chromatograms(self.handle, wrap_gen, wrap_sink, unused_user_data)
+
+        if rc == 0:
+            throwLastTimsDataError(self.dll)
