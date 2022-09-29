@@ -2,9 +2,9 @@ import os
 import shutil
 from pathlib import Path
 from uuid import uuid4
-import streamlit as st
 
-from timstof_utils import generate_ms2
+import streamlit as st
+from tdfextractor.ms2_extractor import get_ms2_content
 
 st.title('TimsTof Raw File Extractor')
 
@@ -48,9 +48,9 @@ if st.button('Run'):
         tdf_bin_path = d_folder / 'analysis.tdf_bin'
         tdf_bin_path.write_bytes(tdf_bin.getvalue())
 
-        ms2_file = generate_ms2(str(d_folder))
+        ms2_content = ''.join(get_ms2_content(str(d_folder)))
 
     finally:
         shutil.rmtree(str(d_folder))
 
-    st.download_button('Download Ms2', ms2_file, ms2_file_name)
+    st.download_button('Download Ms2', ms2_content, ms2_file_name)
