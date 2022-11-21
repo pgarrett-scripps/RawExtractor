@@ -1,0 +1,11 @@
+RawExtractor
+
+A streamlit application to create ms2 files from Bruker .d folders
+
+How to run:
+> pip install -r requirements.txt
+> streamlit run home.py
+
+How to run docker:
+> docker pull pgarrettscripps/raw-extractor
+> docker run -p 8501:8501 raw-extractor
